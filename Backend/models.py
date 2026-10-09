@@ -13,8 +13,11 @@ class Driver(Base):
     __tablename__ = "drivers"
 
     id = Column(Integer, primary_key=True, index=True)
-
     driver_id = Column(String, unique=True, index=True, nullable=False)
+
+    # Google Authentication
+    google_sub = Column(String, unique=True, index=True, nullable=True)
+    email = Column(String, nullable=True)
 
     name = Column(String, nullable=False)
 

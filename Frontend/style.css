@@ -1,3 +1,53 @@
+.auth-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f5f7fb;
+}
+
+.auth-card {
+    width: 380px;
+    padding: 40px;
+    text-align: center;
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+}
+
+.auth-card h1 {
+    margin-bottom: 8px;
+}
+
+.auth-card p {
+    color: #666;
+    margin-bottom: 28px;
+}
+
+.google-login-btn {
+    width: 100%;
+    padding: 13px 18px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    background: white;
+    color: #222;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.google-login-btn span {
+    color: #4285F4;
+    font-weight: 700;
+}
+
+
+/* YOUR EXISTING CSS BELOW THIS LINE */
 * { box-sizing: border-box; }
     body {
         margin: 0;
@@ -161,3 +211,625 @@
     .model-status.loading { background:rgba(245,158,11,.14); color:#fbbf24; }
     .model-status.error { background:rgba(239,68,68,.14); color:#f87171; }
     .disabled-card { opacity:.38; filter:grayscale(1); }
+
+    /* =========================================================
+   PHASE 2 — LIVE RISK ENGINE UI
+   ========================================================= */
+
+    .risk-panel {
+        position: relative;
+        overflow: hidden;
+        transition:
+            border-color 0.3s ease,
+            box-shadow 0.3s ease,
+            background 0.3s ease;
+    }
+
+    .risk-panel::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 3px;
+        height: 100%;
+        background: #10b981;
+        transition: background 0.3s ease;
+    }
+
+    .risk-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        font-weight: 900;
+        font-size: 16px;
+
+        transition:
+            background 0.3s ease,
+            color 0.3s ease,
+            border-color 0.3s ease;
+    }
+
+    .risk-safe {
+        background: rgba(16, 185, 129, 0.12);
+        color: #34d399;
+        border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .risk-low {
+        background: rgba(245, 158, 11, 0.12);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.25);
+    }
+
+    .risk-high {
+        background: rgba(249, 115, 22, 0.12);
+        color: #fb923c;
+        border: 1px solid rgba(249, 115, 22, 0.25);
+    }
+
+    .risk-critical {
+        background: rgba(239, 68, 68, 0.12);
+        color: #f87171;
+        border: 1px solid rgba(239, 68, 68, 0.25);
+    }
+
+    .risk-unknown {
+        background: rgba(107, 114, 128, 0.12);
+        color: #9ca3af;
+        border: 1px solid rgba(107, 114, 128, 0.25);
+    }
+
+    .risk-reason {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        padding: 8px 10px;
+
+        border-radius: 8px;
+
+        font-size: 11px;
+        line-height: 1.3;
+
+        border: 1px solid rgba(255,255,255,0.05);
+
+        background: rgba(0,0,0,0.18);
+
+        transition:
+            background 0.2s ease,
+            border-color 0.2s ease;
+    }
+
+    .risk-reason-icon {
+        width: 18px;
+        height: 18px;
+
+        flex-shrink: 0;
+
+        border-radius: 50%;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        font-size: 10px;
+        font-weight: 900;
+    }
+
+    .risk-reason.safe {
+        color: #9ca3af;
+    }
+
+    .risk-reason.safe .risk-reason-icon {
+        color: #34d399;
+        background: rgba(16,185,129,0.12);
+    }
+
+    .risk-reason.low {
+        color: #d1d5db;
+        border-color: rgba(245,158,11,0.15);
+    }
+
+    .risk-reason.low .risk-reason-icon {
+        color: #fbbf24;
+        background: rgba(245,158,11,0.12);
+    }
+
+    .risk-reason.medium {
+        color: #d1d5db;
+        border-color: rgba(245,158,11,0.2);
+    }
+
+    .risk-reason.medium .risk-reason-icon {
+        color: #fbbf24;
+        background: rgba(245,158,11,0.12);
+    }
+
+    .risk-reason.high {
+        color: #e5e7eb;
+        border-color: rgba(249,115,22,0.25);
+    }
+
+    .risk-reason.high .risk-reason-icon {
+        color: #fb923c;
+        background: rgba(249,115,22,0.12);
+    }
+
+    .risk-reason.critical {
+        color: #fecaca;
+        border-color: rgba(239,68,68,0.35);
+        background: rgba(239,68,68,0.08);
+    }
+
+    .risk-reason.critical .risk-reason-icon {
+        color: #f87171;
+        background: rgba(239,68,68,0.14);
+    }
+
+    .risk-panel.risk-state-safe::before {
+        background: #10b981;
+    }
+
+    .risk-panel.risk-state-low::before {
+        background: #f59e0b;
+    }
+
+    .risk-panel.risk-state-high::before {
+        background: #f97316;
+    }
+
+    .risk-panel.risk-state-critical::before {
+        background: #ef4444;
+    }
+
+    .risk-panel.risk-state-unknown::before {
+        background: #6b7280;
+    }
+
+    .risk-panel.risk-state-critical {
+        animation: riskPanelPulse 1.2s infinite;
+    }
+
+    @keyframes riskPanelPulse {
+        0%, 100% {
+            box-shadow: 0 0 0 rgba(239,68,68,0);
+        }
+
+        50% {
+            box-shadow: 0 0 24px rgba(239,68,68,0.12);
+        }
+    }
+    /* ============================================================
+   DRIVER PROFILE
+   ============================================================ */
+
+.profile-verified {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    background: rgba(16, 185, 129, 0.08);
+    color: #34d399;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.profile-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+}
+
+.profile-stat {
+    padding: 14px;
+    border-radius: 12px;
+    background: rgba(17, 24, 39, 0.75);
+    border: 1px solid rgba(55, 65, 81, 0.7);
+}
+
+.profile-stat p,
+.profile-score-row p {
+    margin: 0 0 6px;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: #6b7280;
+}
+
+.profile-stat span {
+    display: block;
+    color: #f9fafb;
+    font-size: 13px;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.profile-score-row {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(55, 65, 81, 0.7);
+}
+
+.profile-score-row strong {
+    color: #34d399;
+    font-size: 15px;
+}
+
+/* ============================================================
+   LOGOUT BUTTON
+   ============================================================ */
+
+.logout-btn {
+    margin-top: 10px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.08);
+    color: #f87171;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.logout-btn:hover {
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+/* ============================================================
+   TRIP HISTORY
+   ============================================================ */
+
+.trip-history-item {
+    padding: 16px;
+    border-radius: 14px;
+    background: rgba(17, 24, 39, 0.75);
+    border: 1px solid rgba(55, 65, 81, 0.7);
+}
+
+.trip-history-item:hover {
+    border-color: rgba(52, 211, 153, 0.35);
+}
+
+.trip-history-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.trip-history-id {
+    color: #f9fafb;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.trip-history-date {
+    color: #6b7280;
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.trip-history-status {
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.trip-history-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.trip-history-stat {
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(3, 7, 18, 0.5);
+}
+
+.trip-history-stat-label {
+    color: #6b7280;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+}
+
+.trip-history-stat-value {
+    color: #f9fafb;
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 4px;
+}
+
+.trip-history-performance {
+    color: #34d399;
+}
+
+@media (max-width: 640px) {
+    .trip-history-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .trip-history-top {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+
+/* ============================================================
+   HEADER PROFILE BUTTON
+   ============================================================ */
+
+.profile-header-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 12px;
+    border-radius: 9px;
+    border: 1px solid rgba(55, 65, 81, 0.9);
+    background: rgba(17, 24, 39, 0.8);
+    color: #d1d5db;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.profile-header-btn:hover {
+    border-color: rgba(52, 211, 153, 0.45);
+    background: rgba(16, 185, 129, 0.08);
+    color: #34d399;
+}
+```css
+/* SafeRide AI — Driver Profile Modal */
+
+.profile-modal.hidden,
+.profile-subview.hidden {
+    display: none !important;
+}
+
+.profile-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.profile-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.76);
+    backdrop-filter: blur(5px);
+}
+
+.profile-modal-card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 520px;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 24px;
+    border: 1px solid #273449;
+    border-radius: 20px;
+    background: #0b1220;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.profile-modal-header,
+.profile-identity,
+.profile-modal-actions button {
+    display: flex;
+    align-items: center;
+}
+
+.profile-modal-header {
+    justify-content: space-between;
+    margin-bottom: 22px;
+}
+
+.profile-modal-eyebrow {
+    color: #34d399;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+}
+
+.profile-modal-header h2 {
+    margin-top: 5px;
+    font-size: 23px;
+    font-weight: 800;
+}
+
+.profile-close-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    color: #d1d5db;
+    font-size: 25px;
+    cursor: pointer;
+    background: #111827;
+}
+
+.profile-identity {
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    background: rgba(17, 24, 39, 0.7);
+}
+
+.profile-avatar {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+}
+
+.profile-identity h3 {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.profile-identity p {
+    margin-top: 3px;
+    color: #9ca3af;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.profile-modal-verified {
+    display: inline-block;
+    margin-top: 7px;
+    color: #34d399;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+
+.profile-modal-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.profile-modal-stat {
+    min-width: 0;
+    padding: 13px;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    background: #0f172a;
+}
+
+.profile-modal-stat span {
+    display: block;
+    color: #6b7280;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.profile-modal-stat strong {
+    display: block;
+    margin-top: 7px;
+    color: #f3f4f6;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.profile-modal-stat-wide {
+    grid-column: 1 / -1;
+}
+
+.profile-modal-actions {
+    display: grid;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.profile-modal-actions button {
+    gap: 12px;
+    width: 100%;
+    padding: 14px;
+    border: 1px solid #263449;
+    border-radius: 12px;
+    color: #d1d5db;
+    text-align: left;
+    background: #111827;
+    cursor: pointer;
+}
+
+.profile-modal-actions button:hover {
+    border-color: #059669;
+    background: rgba(16, 185, 129, 0.07);
+}
+
+.profile-modal-actions button > i {
+    width: 22px;
+    color: #34d399;
+}
+
+.profile-modal-actions button > span:nth-child(2) {
+    display: grid;
+    flex: 1;
+    gap: 4px;
+}
+
+.profile-modal-actions strong {
+    font-size: 13px;
+}
+
+.profile-modal-actions small {
+    color: #9ca3af;
+    font-size: 11px;
+}
+
+.profile-action-arrow {
+    color: #6b7280;
+}
+
+.profile-modal-logout {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    width: 100%;
+    margin-top: 16px;
+    padding: 11px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 10px;
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.06);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.profile-back-btn {
+    margin: 16px 0;
+    color: #34d399;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#profile-subview-content {
+    margin-top: 12px;
+}
+
+@media (max-width: 480px) {
+    .profile-modal {
+        padding: 10px;
+    }
+
+    .profile-modal-card {
+        padding: 17px;
+    }
+}
+```

@@ -1,5 +1,12 @@
+from fastapi import Request
+from fastapi.responses import RedirectResponse
+
+from auth import oauth, GOOGLE_REDIRECT_URI
+import os
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+from auth import oauth
 from pydantic import BaseModel, Field
 from datetime import datetime
 from uuid import uuid4
@@ -19,19 +26,136 @@ app = FastAPI(
     description="Backend API for the SafeRide AI driver safety platform.",
     version="2.0.0"
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET")
+)
 # ============================================================
 # CORS - ALLOW FRONTEND TO CONNECT TO BACKEND
 # ============================================================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:5501",
+        "http://localhost:5501"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+@app.get("/auth/google/login")
+async def google_login(request: Request):
+    return await oauth.google.authorize_redirect(
+        request,
+        GOOGLE_REDIRECT_URI
+    )
 
 
+@app.get("/auth/google/callback")
+async def google_callback(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    token = await oauth.google.authorize_access_token(request)
+
+    userinfo = token.get("userinfo")
+
+    if not userinfo:
+        userinfo = await oauth.google.parse_id_token(request, token)
+
+    google_sub = userinfo["sub"]
+    email = userinfo.get("email")
+    name = userinfo.get("name") or "SafeRide Driver"
+    picture = userinfo.get("picture")
+
+    # Check if this Google account already has a SafeRide profile
+    driver = (
+        db.query(Driver)
+        .filter(Driver.google_sub == google_sub)
+        .first()
+    )
+
+    # Create a new SafeRide driver profile if this is the first login
+    if not driver:
+        driver = Driver(
+            driver_id="DRV-" + uuid4().hex[:8].upper(),
+            google_sub=google_sub,
+            email=email,
+            name=name,
+            phone="",
+            vehicle_number="",
+            total_trips=0,
+            average_score=0.0
+        )
+
+        db.add(driver)
+        db.commit()
+        db.refresh(driver)
+
+        is_new_driver = True
+
+    else:
+        is_new_driver = False
+
+    # Store authenticated user in session
+    request.session["user"] = {
+        "sub": google_sub,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "driver_id": driver.driver_id
+    }
+
+    return RedirectResponse(
+    url="http://127.0.0.1:5501/index_updated.html"
+)
+
+@app.get("/auth/me")
+def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    user = request.session.get("user")
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated."
+        )
+
+    driver = (
+        db.query(Driver)
+        .filter(Driver.driver_id == user["driver_id"])
+        .first()
+    )
+
+    if not driver:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver profile not found."
+        )
+
+    return {
+        "authenticated": True,
+        "user": {
+            "driver_id": driver.driver_id,
+            "name": driver.name,
+            "email": driver.email,
+            "phone": driver.phone,
+            "vehicle_number": driver.vehicle_number,
+            "total_trips": driver.total_trips,
+            "average_score": driver.average_score
+        }
+    }
+
+@app.get("/auth/logout")
+async def google_logout(request: Request):
+    request.session.clear()
+
+    return {
+        "message": "Logged out successfully"
+    }    
 # Create database tables if they don't exist
 Base.metadata.create_all(bind=engine)
 

@@ -1,5 +1,5 @@
 /*
- * SafeRide AI â€” standalone browser prototype
+ * SafeRide AI — standalone browser prototype
  *
  * Uses:
  *   - Browser getUserMedia() for live camera
@@ -49,7 +49,7 @@ const closureTime = document.getElementById("closure-time");
 const closureBar = document.getElementById("closure-bar");
 
 const API_BASE_URL = "http://127.0.0.1:8000";
-const DRIVER_ID = "SR002";
+let DRIVER_ID = null;
 
 let faceLandmarker = null;
 let cameraStream = null;
@@ -87,6 +87,45 @@ let alarmTimer = null;
 let speechTimer = null;
 
 let alertness = 98;
+// ============================================================
+// PHASE 1 — RISK ENGINE STATE
+// ============================================================
+
+// Smoothed facial signals.
+// These reduce frame-to-frame MediaPipe landmark noise.
+let smoothedEAR = null;
+let smoothedMAR = null;
+
+// Stable eye state with hysteresis.
+let stableEyesClosed = false;
+
+// Stable head state.
+// A short head movement is not immediately treated as distraction.
+let stableHeadState = "Stable";
+let headCandidateState = "Stable";
+let headCandidateSince = null;
+
+// Face tracking protection.
+// Temporary face-loss should not immediately create a safety event.
+let noFaceSince = null;
+
+// Unified driver safety state.
+let currentRiskLevel = "SAFE";
+let currentRiskScore = 98;
+let currentRiskReasons = [];
+
+// Prototype calibration values.
+// These are NOT clinically validated thresholds.
+const SIGNAL_SMOOTHING_ALPHA = 0.25;
+
+const EAR_OPEN_RECOVERY = 0.225;
+
+// Head orientation must remain in a new state for this long
+// before the state is accepted.
+const HEAD_STABILITY_MS = 350;
+
+// Ignore very short MediaPipe face-tracking gaps.
+const FACE_LOSS_GRACE_MS = 700;
 
 // Trip report state. The report is kept in localStorage after a trip ends
 // so the prototype visibly demonstrates trip-data persistence in the browser.
@@ -174,6 +213,84 @@ function mouthAspectRatio(lm) {
     if (horizontal === 0) return 0;
 
     return vertical / horizontal;
+}
+// ============================================================
+// PHASE 1 — SIGNAL SMOOTHING
+// ============================================================
+
+function smoothSignal(previous, current, alpha = SIGNAL_SMOOTHING_ALPHA) {
+    if (!Number.isFinite(current)) {
+        return previous;
+    }
+
+    if (previous === null || !Number.isFinite(previous)) {
+        return current;
+    }
+
+    return previous + alpha * (current - previous);
+}
+
+
+// ============================================================
+// STABLE EYE STATE
+// ============================================================
+
+function getStableEyeState(ear) {
+    if (!Number.isFinite(ear) || ear <= 0) {
+        return stableEyesClosed;
+    }
+
+    // Once the eyes are considered closed, require a clearly
+    // higher EAR to mark them open again.
+    if (stableEyesClosed) {
+        if (ear >= EAR_OPEN_RECOVERY) {
+            stableEyesClosed = false;
+        }
+    } else {
+        if (ear <= EAR_CLOSED) {
+            stableEyesClosed = true;
+        }
+    }
+
+    return stableEyesClosed;
+}
+
+
+// ============================================================
+// STABLE HEAD STATE
+// ============================================================
+
+function getStableHeadState(rawState, now) {
+
+    // Unknown should not immediately become a distraction event.
+    if (!rawState || rawState === "Unknown") {
+        return stableHeadState;
+    }
+
+    // Nothing changed.
+    if (rawState === stableHeadState) {
+        headCandidateState = rawState;
+        headCandidateSince = null;
+        return stableHeadState;
+    }
+
+    // New candidate state detected.
+    if (rawState !== headCandidateState) {
+        headCandidateState = rawState;
+        headCandidateSince = now;
+        return stableHeadState;
+    }
+
+    // Candidate must persist before becoming the official state.
+    if (
+        headCandidateSince &&
+        now - headCandidateSince >= HEAD_STABILITY_MS
+    ) {
+        stableHeadState = headCandidateState;
+        headCandidateSince = null;
+    }
+
+    return stableHeadState;
 }
 
 /*
@@ -319,38 +436,348 @@ function setLiveState(text, colorClass) {
     liveText.textContent = text;
     liveDot.className = "status-dot " + colorClass + " mr-2";
 }
+// =========================================================
+// PHASE 2 — LIVE RISK UI
+// =========================================================
+
+function updateRiskUI(level, score, reasons = []) {
+
+    const panel = $("risk-panel");
+    const levelEl = $("risk-level");
+    const scoreEl = $("risk-score");
+    const barEl = $("risk-bar");
+    const messageEl = $("risk-message");
+    const reasonsEl = $("risk-reasons");
+    const signalCountEl = $("risk-signal-count");
+    const iconEl = $("risk-icon");
+
+    if (!panel || !levelEl || !scoreEl || !barEl ||
+        !messageEl || !reasonsEl || !signalCountEl || !iconEl) {
+        return;
+    }
+
+    const safeScore = Math.max(
+        0,
+        Math.min(100, Math.round(score ?? 0))
+    );
+
+    const normalizedLevel = String(level || "UNKNOWN")
+        .toUpperCase();
+
+    // -----------------------------------------------------
+    // RESET STATE CLASSES
+    // -----------------------------------------------------
+
+    panel.classList.remove(
+        "risk-state-safe",
+        "risk-state-low",
+        "risk-state-high",
+        "risk-state-critical",
+        "risk-state-unknown"
+    );
+
+    iconEl.classList.remove(
+        "risk-safe",
+        "risk-low",
+        "risk-high",
+        "risk-critical",
+        "risk-unknown"
+    );
+
+    // -----------------------------------------------------
+    // SAFE
+    // -----------------------------------------------------
+
+    if (normalizedLevel === "SAFE") {
+
+        panel.classList.add("risk-state-safe");
+        iconEl.classList.add("risk-safe");
+
+        levelEl.textContent = "SAFE";
+        levelEl.className =
+            "text-2xl font-black mt-1 text-emerald-400";
+
+        iconEl.textContent = "✓";
+
+        barEl.style.width = safeScore + "%";
+        barEl.style.background = "#10b981";
+
+        scoreEl.textContent = safeScore + " / 100";
+
+        messageEl.className =
+            "mt-4 rounded-xl bg-emerald-500/5 border border-emerald-500/10 px-3 py-3";
+
+        messageEl.innerHTML = `
+            <p class="text-xs text-emerald-300 font-medium">
+                No active safety concerns.
+            </p>
+        `;
+    }
+
+    // -----------------------------------------------------
+    // LOW RISK
+    // -----------------------------------------------------
+
+    else if (normalizedLevel === "LOW RISK") {
+
+        panel.classList.add("risk-state-low");
+        iconEl.classList.add("risk-low");
+
+        levelEl.textContent = "LOW RISK";
+        levelEl.className =
+            "text-2xl font-black mt-1 text-amber-400";
+
+        iconEl.textContent = "!";
+
+        barEl.style.width = safeScore + "%";
+        barEl.style.background = "#f59e0b";
+
+        scoreEl.textContent = safeScore + " / 100";
+
+        messageEl.className =
+            "mt-4 rounded-xl bg-amber-500/5 border border-amber-500/10 px-3 py-3";
+
+        messageEl.innerHTML = `
+            <p class="text-xs text-amber-300 font-medium">
+                Minor safety signals detected. Stay attentive.
+            </p>
+        `;
+    }
+
+    // -----------------------------------------------------
+    // HIGH RISK
+    // -----------------------------------------------------
+
+    else if (normalizedLevel === "HIGH RISK") {
+
+        panel.classList.add("risk-state-high");
+        iconEl.classList.add("risk-high");
+
+        levelEl.textContent = "HIGH RISK";
+        levelEl.className =
+            "text-2xl font-black mt-1 text-orange-400";
+
+        iconEl.textContent = "!";
+
+        barEl.style.width = safeScore + "%";
+        barEl.style.background = "#f97316";
+
+        scoreEl.textContent = safeScore + " / 100";
+
+        messageEl.className =
+            "mt-4 rounded-xl bg-orange-500/5 border border-orange-500/15 px-3 py-3";
+
+        messageEl.innerHTML = `
+            <p class="text-xs text-orange-300 font-medium">
+                Attention required. One or more safety signals are elevated.
+            </p>
+        `;
+    }
+
+    // -----------------------------------------------------
+    // CRITICAL
+    // -----------------------------------------------------
+
+    else if (normalizedLevel === "CRITICAL") {
+
+        panel.classList.add("risk-state-critical");
+        iconEl.classList.add("risk-critical");
+
+        levelEl.textContent = "CRITICAL";
+        levelEl.className =
+            "text-2xl font-black mt-1 text-red-400";
+
+        iconEl.textContent = "⚠";
+
+        barEl.style.width = safeScore + "%";
+        barEl.style.background = "#ef4444";
+
+        scoreEl.textContent = safeScore + " / 100";
+
+        messageEl.className =
+            "mt-4 rounded-xl bg-red-500/10 border border-red-500/25 px-3 py-3";
+
+        messageEl.innerHTML = `
+            <p class="text-xs text-red-300 font-bold">
+                Immediate driver attention required.
+            </p>
+        `;
+    }
+
+    // -----------------------------------------------------
+    // UNKNOWN / NO FACE
+    // -----------------------------------------------------
+
+    else {
+
+        panel.classList.add("risk-state-unknown");
+        iconEl.classList.add("risk-unknown");
+
+        levelEl.textContent = "NO FACE";
+        levelEl.className =
+            "text-2xl font-black mt-1 text-gray-400";
+
+        iconEl.textContent = "—";
+
+        barEl.style.width = "0%";
+        barEl.style.background = "#6b7280";
+
+        scoreEl.textContent = "-- / 100";
+
+        messageEl.className =
+            "mt-4 rounded-xl bg-gray-500/5 border border-gray-500/10 px-3 py-3";
+
+        messageEl.innerHTML = `
+            <p class="text-xs text-gray-400 font-medium">
+                Driver face is not currently visible to the camera.
+            </p>
+        `;
+    }
+
+    // -----------------------------------------------------
+    // ACTIVE SIGNALS
+    // -----------------------------------------------------
+
+    signalCountEl.textContent = reasons.length;
+
+    if (!reasons.length) {
+
+        reasonsEl.innerHTML = `
+            <div class="risk-reason safe">
+                <span class="risk-reason-icon">✓</span>
+                <span>No active risk signals</span>
+            </div>
+        `;
+
+        return;
+    }
+
+    reasonsEl.innerHTML = reasons
+        .slice(0, 4)
+        .map(reason => {
+
+            const severity = reason.severity || "low";
+
+            let icon = "!";
+
+            if (severity === "critical") {
+                icon = "⚠";
+            } else if (severity === "high") {
+                icon = "!";
+            } else if (severity === "medium") {
+                icon = "•";
+            } else {
+                icon = "·";
+            }
+
+            return `
+                <div class="risk-reason ${severity}">
+                    <span class="risk-reason-icon">${icon}</span>
+                    <span>${reason.text}</span>
+                </div>
+            `;
+
+        })
+        .join("");
+}
 
 function updateGauge(value) {
-    const val = Math.max(0, Math.min(100, Math.round(value)));
-    const circle = $("gauge-circle");
+
+    const val = Math.max(
+        0,
+        Math.min(
+            100,
+            Math.round(value)
+        )
+    );
+
+    const circle =
+        $("gauge-circle");
 
     const circumference = 327;
-    const offset = circumference - (circumference * val / 100);
 
-    circle.style.strokeDashoffset = offset;
+    const offset =
+        circumference -
+        (circumference * val / 100);
 
-    const status = $("score-status");
-    const scoreText = $("score-text");
+    circle.style.strokeDashoffset =
+        offset;
 
-    scoreText.textContent = val;
+    const status =
+        $("score-status");
 
-    if (val >= 80) {
-        circle.style.stroke = "#10b981";
-        status.textContent = "Excellent";
-        status.className = "text-emerald-400 text-sm font-medium mt-3";
-    } else if (val >= 60) {
-        circle.style.stroke = "#f59e0b";
-        status.textContent = "Caution";
-        status.className = "text-amber-400 text-sm font-medium mt-3";
-    } else if (val >= 35) {
-        circle.style.stroke = "#f97316";
-        status.textContent = "High Risk";
-        status.className = "text-orange-400 text-sm font-medium mt-3 pulse-alert";
+    const scoreText =
+        $("score-text");
+
+    scoreText.textContent =
+        val;
+
+
+    // ========================================================
+    // RISK LEVEL
+    // ========================================================
+
+    let level = "SAFE";
+
+    if (val >= 85) {
+
+        level = "SAFE";
+
+        circle.style.stroke =
+            "#10b981";
+
+        status.textContent =
+            "SAFE";
+
+        status.className =
+            "text-emerald-400 text-sm font-medium mt-3";
+
+    } else if (val >= 70) {
+
+        level = "LOW RISK";
+
+        circle.style.stroke =
+            "#f59e0b";
+
+        status.textContent =
+            "LOW RISK";
+
+        status.className =
+            "text-amber-400 text-sm font-medium mt-3";
+
+    } else if (val >= 50) {
+
+        level = "HIGH RISK";
+
+        circle.style.stroke =
+            "#f97316";
+
+        status.textContent =
+            "HIGH RISK";
+
+        status.className =
+            "text-orange-400 text-sm font-medium mt-3 pulse-alert";
+
     } else {
-        circle.style.stroke = "#ef4444";
-        status.textContent = "DANGER";
-        status.className = "text-red-400 text-sm font-medium mt-3 pulse-alert";
+
+        level = "CRITICAL";
+
+        circle.style.stroke =
+            "#ef4444";
+
+        status.textContent =
+            "CRITICAL";
+
+        status.className =
+            "text-red-400 text-sm font-medium mt-3 pulse-alert";
     }
+
+
+    currentRiskLevel =
+        level;
+
+    currentRiskScore =
+        val;
 }
 
 function addAlert(message, severity = "warning") {
@@ -382,7 +809,7 @@ function addAlert(message, severity = "warning") {
             hour: "2-digit",
             minute: "2-digit",
             second: "2-digit"
-        }) + " â€” " + message;
+        }) + " — " + message;
 
     log.prepend(div);
 
@@ -543,16 +970,20 @@ function calculateTripRating() {
 }
 
 function starsForScore(score) {
-    const rounded = Math.max(0, Math.min(5, Math.round(score / 2)));
-    return "â˜…".repeat(rounded) + "â˜†".repeat(5 - rounded);
+    const rounded = Math.max(
+        0,
+        Math.min(5, Math.round(score / 2))
+    );
+
+    return "★".repeat(rounded) + "☆".repeat(5 - rounded);
 }
 
 function ratingText(score) {
     if (score >= 9) return "Excellent driving performance";
-    if (score >= 7.5) return "Good performance â€” minor safety events detected";
-    if (score >= 6) return "Needs improvement â€” fatigue/distraction events detected";
-    if (score >= 4) return "Poor performance â€” frequent safety warnings";
-    return "High-risk trip â€” immediate improvement required";
+    if (score >= 7.5) return "Good performance — minor safety events detected";
+    if (score >= 6) return "Needs improvement — fatigue/distraction events detected";
+    if (score >= 4) return "Poor performance — frequent safety warnings";
+    return "High-risk trip — immediate improvement required";
 }
 
 function updateTripReport(save = false) {
@@ -600,7 +1031,7 @@ function updateTripReport(save = false) {
         lastSavedTrip = report;
         $("report-storage").textContent = "SAVED LOCALLY";
         $("report-storage").className = "text-[10px] px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400";
-        $("report-state").textContent = "Trip completed â€¢ report stored in browser";
+        $("report-state").textContent = "Trip completed • report stored in browser";
     }
 }
 
@@ -619,7 +1050,7 @@ function loadLastTripReport() {
         tripCriticalCount = report.criticalAlerts || 0;
         tripEventCount = report.events || 0;
         updateTripReport(false);
-        $("report-state").textContent = "Last completed trip â€¢ loaded from browser storage";
+        $("report-state").textContent = "Last completed trip • loaded from browser storage";
         $("report-storage").textContent = "SAVED LOCALLY";
         $("report-storage").className = "text-[10px] px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400";
     } catch (e) {
@@ -672,7 +1103,7 @@ function showRefreshRecommendation() {
     $("refresh-alert").classList.remove("hidden");
 
     addAlert(
-        "5 yawns detected â€” driver should stop safely and get refreshed.",
+        "5 yawns detected — driver should stop safely and get refreshed.",
         "critical"
     );
 
@@ -706,9 +1137,9 @@ function registerYawn(now) {
         addAlert("Yawn 1 detected.", "caution");
     } else if (yawnCount === 2 && yawnWarningLevel < 1) {
         yawnWarningLevel = 1;
-        addAlert("Yawn warning â€” 2 yawns detected. Please stay alert.", "caution");
+        addAlert("Yawn warning — 2 yawns detected. Please stay alert.", "caution");
         $("alert-overlay").classList.remove("hidden");
-        $("alert-overlay-text").textContent = "âš  FATIGUE WARNING â€” 2 YAWNS DETECTED";
+        $("alert-overlay-text").textContent = "⚠  FATIGUE WARNING — 2 YAWNS DETECTED";
         playAlarmTone(720, 180);
     } else if (yawnCount > 2 && yawnCount < 5) {
         addAlert("Yawn " + yawnCount + " detected. Fatigue level is increasing.", "caution");
@@ -785,22 +1216,22 @@ function handleDistraction(headState, now) {
         distractionWarningLevel = 1;
         if (bookingActive) distractionIncidentCount++;
         addAlert(
-            "Distraction warning â€” head has been away from forward position for about 10 seconds.",
+            "Distraction warning — head has been away from forward position for about 10 seconds.",
             "caution"
         );
         $("alert-overlay").classList.remove("hidden");
-        $("alert-overlay-text").textContent = "âš  DISTRACTION WARNING â€” LOOK FORWARD";
+        $("alert-overlay-text").textContent = "⚠  DISTRACTION WARNING — LOOK FORWARD";
         playAlarmTone(780, 180);
     }
 
     if (elapsed >= 15000 && distractionWarningLevel < 2) {
         distractionWarningLevel = 2;
         addAlert(
-            "Second distraction warning â€” 15 seconds of continuous head diversion.",
+            "Second distraction warning — 15 seconds of continuous head diversion.",
             "critical"
         );
         $("alert-overlay").classList.remove("hidden");
-        $("alert-overlay-text").textContent = "ðŸš¨ SECOND DISTRACTION WARNING";
+        $("alert-overlay-text").textContent = "🚨 SECOND DISTRACTION WARNING";
         playAlarmTone(950, 250);
     }
 
@@ -808,7 +1239,7 @@ function handleDistraction(headState, now) {
         distractionCriticalTriggered = true;
 
         addAlert(
-            "ALARM â€” distraction may lead to accident!!",
+            "ALARM — distraction may lead to accident!!",
             "critical"
         );
 
@@ -816,7 +1247,7 @@ function handleDistraction(headState, now) {
             title: "DISTRACTION ALERT",
             message: "Driver attention has been away from the forward direction for too long.",
             durationLabel: "CONTINUOUS DISTRACTION: " + secondsLabel(elapsed),
-            instruction: "DISTRACTION MAY LEAD TO ACCIDENT!! â€” LOOK FORWARD AND DRIVE SAFELY.",
+            instruction: "DISTRACTION MAY LEAD TO ACCIDENT!! — LOOK FORWARD AND DRIVE SAFELY.",
             speech: "Warning. Distraction may lead to accident. Please look forward and focus on the road."
         });
     }
@@ -878,21 +1309,21 @@ function handleEyeState(eyesClosed, now) {
 
         if (elapsed >= 5000 && warningLevel < 3) {
             warningLevel = 3;
-            addAlert("Critical warning â€” eyes closed for more than 5 seconds.", "critical");
+            addAlert("Critical warning — eyes closed for more than 5 seconds.", "critical");
             $("alert-overlay").classList.remove("hidden");
-            $("alert-overlay-text").textContent = "ðŸš¨ CRITICAL DROWSINESS WARNING";
+            $("alert-overlay-text").textContent = "🚨 CRITICAL DROWSINESS WARNING";
             playAlarmTone(950, 250);
         } else if (elapsed >= 3000 && warningLevel < 2) {
             warningLevel = 2;
-            addAlert("Strong warning â€” prolonged eye closure detected.", "critical");
+            addAlert("Strong warning — prolonged eye closure detected.", "critical");
             $("alert-overlay").classList.remove("hidden");
-            $("alert-overlay-text").textContent = "âš  PROLONGED EYE CLOSURE";
+            $("alert-overlay-text").textContent = "⚠  PROLONGED EYE CLOSURE";
             playAlarmTone(850, 180);
         } else if (elapsed >= 1000 && warningLevel < 1) {
             warningLevel = 1;
-            addAlert("Possible drowsiness â€” eye closure lasting over 1 second.", "caution");
+            addAlert("Possible drowsiness — eye closure lasting over 1 second.", "caution");
             $("alert-overlay").classList.remove("hidden");
-            $("alert-overlay-text").textContent = "âš  DROWSINESS WARNING";
+            $("alert-overlay-text").textContent = "⚠  DROWSINESS WARNING";
             playAlarmTone(700, 140);
         }
     } else {
@@ -916,113 +1347,472 @@ function handleEyeState(eyesClosed, now) {
     }
 }
 
-function calculateSafetyScore(ear, mar, headState, now) {
-    let score = 98;
+// ============================================================
+// PHASE 1 — UNIFIED RISK ENGINE
+// ============================================================
 
-    if (ear < EAR_CLOSED) {
-        if (eyesClosedSince) {
-            const seconds = (now - eyesClosedSince) / 1000;
+function calculateRiskProfile(ear, mar, headState, now) {
 
-            if (seconds >= 8) score -= 70;
-            else if (seconds >= 5) score -= 55;
-            else if (seconds >= 3) score -= 38;
-            else if (seconds >= 1) score -= 22;
+    let score = 100;
+    const reasons = [];
+
+    // --------------------------------------------------------
+    // 1. EYE CLOSURE / DROWSINESS
+    // --------------------------------------------------------
+
+    let eyeClosureSeconds = 0;
+
+    if (eyesClosedSince) {
+        eyeClosureSeconds =
+            (now - eyesClosedSince) / 1000;
+    }
+
+    if (eyeClosureSeconds >= 8) {
+
+        score -= 55;
+
+        reasons.push({
+            type: "drowsiness",
+            severity: "critical",
+            text: "Prolonged eye closure"
+        });
+
+    } else if (eyeClosureSeconds >= 5) {
+
+        score -= 38;
+
+        reasons.push({
+            type: "drowsiness",
+            severity: "high",
+            text: "Extended eye closure"
+        });
+
+    } else if (eyeClosureSeconds >= 3) {
+
+        score -= 22;
+
+        reasons.push({
+            type: "drowsiness",
+            severity: "medium",
+            text: "Sustained eye closure"
+        });
+
+    } else if (eyeClosureSeconds >= 1) {
+
+        score -= 8;
+
+        reasons.push({
+            type: "drowsiness",
+            severity: "low",
+            text: "Possible drowsiness"
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 2. CURRENT YAWN
+    // --------------------------------------------------------
+
+    if (mar > YAWN_MAR) {
+
+        score -= 4;
+
+        reasons.push({
+            type: "yawn",
+            severity: "low",
+            text: "Yawning detected"
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 3. CUMULATIVE YAWNS
+    // --------------------------------------------------------
+
+    if (yawnCount >= 5) {
+
+        score -= 22;
+
+        reasons.push({
+            type: "fatigue",
+            severity: "critical",
+            text: "Repeated yawning detected"
+        });
+
+    } else if (yawnCount >= 2) {
+
+        score -= 12;
+
+        reasons.push({
+            type: "fatigue",
+            severity: "medium",
+            text: "Multiple yawns detected"
+        });
+
+    } else if (yawnCount >= 1) {
+
+        score -= 4;
+
+        reasons.push({
+            type: "fatigue",
+            severity: "low",
+            text: "Yawn detected"
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 4. HEAD ORIENTATION
+    // --------------------------------------------------------
+
+    if (headState === "Turned Away") {
+
+        score -= 15;
+
+        reasons.push({
+            type: "distraction",
+            severity: "high",
+            text: "Driver looking away from road"
+        });
+
+    } else if (headState === "Downward") {
+
+        score -= 12;
+
+        reasons.push({
+            type: "distraction",
+            severity: "high",
+            text: "Driver looking downward"
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 5. CONTINUOUS DISTRACTION
+    // --------------------------------------------------------
+
+    let distractionSeconds = 0;
+
+    if (distractionSince) {
+
+        distractionSeconds =
+            (now - distractionSince) / 1000;
+
+        if (distractionSeconds >= 16) {
+
+            score -= 45;
+
+            reasons.push({
+                type: "distraction",
+                severity: "critical",
+                text: "Prolonged distraction"
+            });
+
+        } else if (distractionSeconds >= 15) {
+
+            score -= 30;
+
+            reasons.push({
+                type: "distraction",
+                severity: "high",
+                text: "Extended distraction"
+            });
+
+        } else if (distractionSeconds >= 10) {
+
+            score -= 18;
+
+            reasons.push({
+                type: "distraction",
+                severity: "medium",
+                text: "Continuous distraction"
+            });
+
+        } else if (distractionSeconds >= 3) {
+
+            score -= 6;
+
+            reasons.push({
+                type: "distraction",
+                severity: "low",
+                text: "Attention drifting"
+            });
         }
     }
 
-    if (mar > YAWN_MAR) {
-        score -= 10;
+
+    // --------------------------------------------------------
+    // 6. MULTI-SIGNAL RISK FUSION
+    // --------------------------------------------------------
+    // When multiple independent signals appear together,
+    // increase the risk slightly.
+
+    if (
+        eyeClosureSeconds >= 3 &&
+        yawnCount >= 2
+    ) {
+
+        score -= 8;
+
+        reasons.push({
+            type: "combined",
+            severity: "high",
+            text: "Multiple fatigue signals detected"
+        });
     }
 
-    if (headState === "Turned Away") {
-        score -= 18;
-    } else if (headState === "Downward") {
-        score -= 12;
+
+    if (
+        distractionSeconds >= 10 &&
+        eyeClosureSeconds >= 1
+    ) {
+
+        score -= 8;
+
+        reasons.push({
+            type: "combined",
+            severity: "high",
+            text: "Distraction and eye-closure signals combined"
+        });
     }
 
-    // Repeated yawns indicate increasing fatigue.
-    if (yawnCount >= 5) score -= 28;
-    else if (yawnCount >= 2) score -= 14;
-    else if (yawnCount >= 1) score -= 5;
 
-    // Continuous distraction receives an escalating penalty.
-    if (distractionSince) {
-        const distractedSeconds = (now - distractionSince) / 1000;
-        if (distractedSeconds >= 16) score -= 50;
-        else if (distractedSeconds >= 15) score -= 35;
-        else if (distractedSeconds >= 10) score -= 22;
-        else score -= 8;
+    // --------------------------------------------------------
+    // 7. FINAL SCORE
+    // --------------------------------------------------------
+
+    score = Math.max(
+        0,
+        Math.min(100, Math.round(score))
+    );
+
+
+    // --------------------------------------------------------
+    // 8. RISK LEVEL
+    // --------------------------------------------------------
+
+    let level = "SAFE";
+
+    if (score >= 85) {
+
+        level = "SAFE";
+
+    } else if (score >= 70) {
+
+        level = "LOW RISK";
+
+    } else if (score >= 50) {
+
+        level = "HIGH RISK";
+
+    } else {
+
+        level = "CRITICAL";
     }
 
-    // Keep the score in a usable dashboard range.
-    return Math.max(10, Math.min(100, score));
+
+    return {
+        score,
+        level,
+        reasons
+    };
 }
 
+
+// Compatibility wrapper.
+// Existing parts of SafeRide can still call calculateSafetyScore().
+function calculateSafetyScore(ear, mar, headState, now) {
+
+    const profile =
+        calculateRiskProfile(
+            ear,
+            mar,
+            headState,
+            now
+        );
+
+    currentRiskScore = profile.score;
+    currentRiskLevel = profile.level;
+    currentRiskReasons = profile.reasons;
+
+    return profile.score;
+}
+
+
 function processFaceResult(result, now) {
-    if (!result || !result.faceLandmarks || result.faceLandmarks.length === 0) {
+    // ------------------------------------------------------------
+    // NO FACE
+    // ------------------------------------------------------------
+    if (
+        !result ||
+        !result.faceLandmarks ||
+        result.faceLandmarks.length === 0
+    ) {
+        if (!noFaceSince) {
+            noFaceSince = now;
+        }
+
         $("face-box").style.display = "none";
         setLiveState("NO FACE", "bg-amber-500");
 
         setIndicator("ind-eye", "bg-gray-600");
         setIndicator("ind-yawn", "bg-gray-600");
         setIndicator("ind-head", "bg-gray-600");
+        setIndicator("ind-distract", "bg-gray-600");
 
         $("ear-val").textContent = "--";
         $("mar-val").textContent = "--";
         $("head-val").textContent = "No face";
-        updateDistractionUI(now);
 
+        // MediaPipe can briefly lose a face for a few frames.
+        if (now - noFaceSince >= FACE_LOSS_GRACE_MS) {
+            eyesClosedSince = null;
+            mouthOpenSince = null;
+            distractionSince = null;
+
+            stableEyesClosed = false;
+            headCandidateState = "Stable";
+            headCandidateSince = null;
+            stableHeadState = "Stable";
+
+            smoothedEAR = null;
+            smoothedMAR = null;
+
+            currentRiskLevel = "UNKNOWN";
+            currentRiskScore = 0;
+            currentRiskReasons = [];
+
+            $("score-text").textContent = "--";
+            $("score-status").textContent = "NO FACE";
+        }
+
+        updateRiskUI("UNKNOWN", 0, []);
+        updateEyeClosureTimer(now);
+        updateDistractionUI(now);
         return;
     }
+
+    // Face is visible again.
+    noFaceSince = null;
 
     const lm = result.faceLandmarks[0];
 
     updateFaceBox(lm);
     drawLandmarks(lm);
 
+    // ------------------------------------------------------------
+    // RAW SIGNALS
+    // ------------------------------------------------------------
     const leftEAR = eyeAspectRatio(lm, LEFT_EYE);
     const rightEAR = eyeAspectRatio(lm, RIGHT_EYE);
-    const ear = (leftEAR + rightEAR) / 2;
 
-    const mar = mouthAspectRatio(lm);
-    const head = estimateHeadState(lm);
+    const rawEAR = (leftEAR + rightEAR) / 2;
+    const rawMAR = mouthAspectRatio(lm);
+    const rawHead = estimateHeadState(lm);
 
-    const eyesClosed = ear > 0 && ear < EAR_CLOSED;
+    // ------------------------------------------------------------
+    // SIGNAL SMOOTHING
+    // ------------------------------------------------------------
+    smoothedEAR = smoothSignal(smoothedEAR, rawEAR);
+    smoothedMAR = smoothSignal(smoothedMAR, rawMAR);
+
+    const ear = smoothedEAR ?? rawEAR;
+    const mar = smoothedMAR ?? rawMAR;
+
+    // ------------------------------------------------------------
+    // STABLE STATES
+    // ------------------------------------------------------------
+    const eyesClosed = getStableEyeState(ear);
+
+    const stableHead = getStableHeadState(
+        rawHead.label,
+        now
+    );
+
+    const head = {
+        label: stableHead,
+        score: stableHead === "Stable" ? 0 : 1
+    };
+
+    // ------------------------------------------------------------
+    // YAWN EVENT DETECTION
+    // ------------------------------------------------------------
     const yawnDetected = mar > YAWN_MAR;
 
-    // Yawn detection is event-based: count once when a sustained mouth-open
-    // period finishes. This prevents a single long yawn from being counted
-    // on every processed frame.
-    if (mar > YAWN_MAR) {
+    if (yawnDetected) {
         if (!mouthOpenSince) {
             mouthOpenSince = now;
             yawnInProgress = false;
         }
 
-        if (!yawnInProgress && now - mouthOpenSince >= YAWN_HOLD_MS) {
+        if (
+            !yawnInProgress &&
+            now - mouthOpenSince >= YAWN_HOLD_MS
+        ) {
             yawnInProgress = true;
         }
     } else {
+        // Count once when the sustained mouth-open period ends.
         if (yawnInProgress) {
             registerYawn(now);
         }
+
         mouthOpenSince = null;
         yawnInProgress = false;
     }
 
+    // ------------------------------------------------------------
+    // EXISTING INTERVENTION LOGIC
+    // ------------------------------------------------------------
     handleEyeState(eyesClosed, now);
     updateEyeClosureTimer(now);
+
     handleDistraction(head.label, now);
     updateDistractionUI(now);
 
-    const score = calculateSafetyScore(ear, mar, head.label, now);
+    // ------------------------------------------------------------
+    // UNIFIED RISK ENGINE
+    // ------------------------------------------------------------
+    const riskProfile = calculateRiskProfile(
+        ear,
+        mar,
+        head.label,
+        now
+    );
 
-    // Smooth the score slightly so it doesn't jump every frame.
-    alertness = alertness * 0.72 + score * 0.28;
+    currentRiskScore = riskProfile.score;
+    currentRiskLevel = riskProfile.level;
+    currentRiskReasons = riskProfile.reasons;
+
+    // ------------------------------------------------------------
+    // FINAL SCORE SMOOTHING
+    // ------------------------------------------------------------
+    alertness =
+        alertness * 0.72 +
+        riskProfile.score * 0.28;
+
+    alertness = Math.max(
+        0,
+        Math.min(100, alertness)
+    );
 
     updateGauge(alertness);
 
-    updateMetrics(ear, mar, head.label);
+    // Risk Engine panel shows the current risk profile.
+    updateRiskUI(
+        riskProfile.level,
+        riskProfile.score,
+        riskProfile.reasons
+    );
+
+    // ------------------------------------------------------------
+    // LIVE DASHBOARD
+    // ------------------------------------------------------------
+    updateMetrics(
+        ear,
+        mar,
+        head.label
+    );
 
     setIndicator(
         "ind-eye",
@@ -1039,12 +1829,14 @@ function processFaceResult(result, now) {
     setIndicator(
         "ind-head",
         head.score
-            ? (head.label === "Turned Away" ? "bg-amber-500" : "bg-orange-500")
+            ? (
+                head.label === "Turned Away"
+                    ? "bg-amber-500"
+                    : "bg-orange-500"
+            )
             : "bg-emerald-500",
         !!head.score
     );
-
-    setLiveState("FACE TRACKING", "bg-emerald-500");
 
     if (head.score) {
         $("ind-distract").className =
@@ -1053,6 +1845,11 @@ function processFaceResult(result, now) {
         $("ind-distract").className =
             "w-3 h-3 rounded-full bg-emerald-500";
     }
+
+    setLiveState(
+        "FACE TRACKING",
+        "bg-emerald-500"
+    );
 }
 
 async function initFaceLandmarker() {
@@ -1300,9 +2097,6 @@ async function startCamera() {
 let cameraRecovering = false;
 
 async function recoverCamera() {
-    console.log("RECOVERY BLOCKED FOR TEST");
-    return;
-    
     if (cameraRecovering || !bookingActive) return;
 
     cameraRecovering = true;
@@ -1650,7 +2444,7 @@ async function startMonitoring() {
             const restrictionStatus = $("restriction-status");
             if (restrictionStatus) {
                 restrictionStatus.textContent =
-                    "Safety Mode active â€” distracting apps simulated as restricted.";
+                    "Safety Mode active — distracting apps simulated as restricted.";
             }
 
             document
@@ -1669,7 +2463,7 @@ async function startMonitoring() {
             const reportState = $("report-state");
             if (reportState) {
                 reportState.textContent =
-                    "Trip active â€¢ collecting safety performance";
+                    "Trip active • collecting safety performance";
             }
 
             const reportStorage = $("report-storage");
@@ -1685,6 +2479,30 @@ async function startMonitoring() {
             eyesClosedSince = null;
             criticalTriggered = false;
             warningLevel = 0;
+            // ========================================================
+            // RESET PHASE 1 RISK ENGINE
+            // ========================================================
+
+            smoothedEAR = null;
+            smoothedMAR = null;
+
+            stableEyesClosed = false;
+
+            stableHeadState = "Stable";
+            headCandidateState = "Stable";
+            headCandidateSince = null;
+
+            noFaceSince = null;
+
+            currentRiskLevel = "SAFE";
+            currentRiskScore = 98;
+            currentRiskReasons = [];
+           
+            updateRiskUI(
+            "SAFE",
+            98,
+            []
+            );
 
             mouthOpenSince = null;
             yawnInProgress = false;
@@ -1874,7 +2692,21 @@ async function startMonitoring() {
     setIndicator("ind-distract", "bg-emerald-500");
 
     alertness = 98;
+
+    smoothedEAR = null;
+    smoothedMAR = null;
+    stableEyesClosed = false;
+    stableHeadState = "Stable";
+    headCandidateState = "Stable";
+    headCandidateSince = null;
+    noFaceSince = null;
+
+    currentRiskLevel = "SAFE";
+    currentRiskScore = 98;
+    currentRiskReasons = [];
+
     updateGauge(98);
+    updateRiskUI("SAFE", 98, []);
 
     // Make absolutely sure the frontend no longer
     // remembers the completed backend trip.
@@ -1938,3 +2770,575 @@ if (window.lucide) {
 
 loadLastTripReport();
 initFaceLandmarker();
+
+const BACKEND_URL = "http://127.0.0.1:8000";
+
+const authScreen = document.getElementById("auth-screen");
+const googleLoginBtn = document.getElementById("google-login-btn");
+
+async function checkAuthentication() {
+    try {
+        const response = await fetch(`${BACKEND_URL}/auth/me`, {
+            credentials: "include"
+        });
+
+        if (!response.ok) {
+            showLoginScreen();
+            return;
+        }
+
+        const data = await response.json();
+
+        if (data.authenticated) {
+            showApp(data.user);
+        } else {
+            showLoginScreen();
+        }
+
+    } catch (error) {
+        console.error("Authentication check failed:", error);
+        showLoginScreen();
+    }
+}
+
+function showLoginScreen() {
+    if (authScreen) {
+        authScreen.style.display = "flex";
+    }
+}
+
+function showApp(user) {
+    if (authScreen) {
+        authScreen.style.display = "none";
+    }
+
+    console.log("Logged-in SafeRide driver:", user);
+
+    // Make the authenticated driver available
+    // to the rest of the frontend.
+    window.safeRideUser = user;
+    DRIVER_ID = user.driver_id;
+    loadTripHistory();
+
+    // Populate Driver Profile
+    const profileName = document.getElementById("profile-name");
+    const profileEmail = document.getElementById("profile-email");
+    const profileDriverId = document.getElementById("profile-driver-id");
+    const profilePhone = document.getElementById("profile-phone");
+    const profileVehicle = document.getElementById("profile-vehicle");
+    const profileTrips = document.getElementById("profile-trips");
+    const profileAverageScore =
+        document.getElementById("profile-average-score");
+
+    if (profileName) {
+        profileName.textContent =
+            user.name || "SafeRide Driver";
+    }
+
+    if (profileEmail) {
+        profileEmail.textContent =
+            user.email || "Email unavailable";
+    }
+
+    if (profileDriverId) {
+        profileDriverId.textContent =
+            user.driver_id || "--";
+    }
+
+    if (profilePhone) {
+        profilePhone.textContent =
+            user.phone || "Not added";
+    }
+
+    if (profileVehicle) {
+        profileVehicle.textContent =
+            user.vehicle_number || "Not added";
+    }
+
+    if (profileTrips) {
+        profileTrips.textContent =
+            user.total_trips ?? 0;
+    }
+
+    if (profileAverageScore) {
+        const score = Number(user.average_score || 0);
+
+        profileAverageScore.textContent =
+            score > 0
+                ? `${score.toFixed(1)} / 100`
+                : "Not rated yet";
+    }
+}
+
+checkAuthentication();
+
+// ============================================================
+// SAFE RIDE AI - LOGOUT
+// ============================================================
+
+const logoutBtn = document.getElementById("logout-btn");
+
+if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+
+        try {
+            const response = await fetch(
+                `${BACKEND_URL}/auth/logout`,
+                {
+                    method: "GET",
+                    credentials: "include"
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error("Logout failed.");
+            }
+
+            window.safeRideUser = null;
+            DRIVER_ID = null;
+
+            showLoginScreen();
+
+        } catch (error) {
+            console.error("Logout error:", error);
+        }
+    });
+}
+
+// ============================================================
+// SAFE RIDE AI - TRIP HISTORY
+// ============================================================
+
+async function loadTripHistory() {
+
+    if (!DRIVER_ID) {
+        console.warn("Trip history skipped: no authenticated driver.");
+        return;
+    }
+
+    const historyCount =
+        document.getElementById("history-count");
+
+    const historyList =
+        document.getElementById("trip-history-list");
+
+    if (!historyList) {
+        return;
+    }
+
+    try {
+
+        const response = await fetch(
+            `${API_BASE_URL}/drivers/${DRIVER_ID}/history`
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                data.detail || "Unable to load trip history."
+            );
+        }
+
+        const trips = data.trips || [];
+
+        if (historyCount) {
+            historyCount.textContent = trips.length;
+        }
+
+        if (trips.length === 0) {
+
+            historyList.innerHTML = `
+                <div id="trip-history-empty"
+                     class="rounded-xl border border-dashed border-gray-800 p-8 text-center">
+
+                    <div class="text-3xl mb-2">🛣️</div>
+
+                    <p class="text-sm text-gray-400">
+                        No completed trips yet.
+                    </p>
+
+                    <p class="text-xs text-gray-600 mt-1">
+                        Complete a SafeRide trip to see it here.
+                    </p>
+
+                </div>
+            `;
+
+            return;
+        }
+
+        historyList.innerHTML = trips
+            .map(trip => {
+
+                const startDate = trip.start_time
+                    ? new Date(trip.start_time)
+                    : null;
+
+                const dateText = startDate
+                    ? startDate.toLocaleString()
+                    : "Unknown date";
+
+                const score =
+                    trip.final_score !== null &&
+                    trip.final_score !== undefined
+                        ? Number(trip.final_score).toFixed(0)
+                        : "--";
+
+                const rating =
+                    trip.rating !== null &&
+                    trip.rating !== undefined
+                        ? `${trip.rating}/5`
+                        : "--";
+
+                const performance =
+                    trip.performance || "Not rated";
+
+                return `
+                    <div class="trip-history-item">
+
+                        <div class="trip-history-top">
+
+                            <div>
+                                <div class="trip-history-id">
+                                    ${trip.trip_id}
+                                </div>
+
+                                <div class="trip-history-date">
+                                    ${dateText}
+                                </div>
+                            </div>
+
+                            <span class="trip-history-status">
+                                ${(trip.status || "UNKNOWN").toUpperCase()}
+                            </span>
+
+                        </div>
+
+                        <div class="trip-history-stats">
+
+                            <div class="trip-history-stat">
+                                <div class="trip-history-stat-label">
+                                    SAFETY SCORE
+                                </div>
+
+                                <div class="trip-history-stat-value">
+                                    ${score}/100
+                                </div>
+                            </div>
+
+                            <div class="trip-history-stat">
+                                <div class="trip-history-stat-label">
+                                    RATING
+                                </div>
+
+                                <div class="trip-history-stat-value">
+                                    ${rating}
+                                </div>
+                            </div>
+
+                            <div class="trip-history-stat">
+                                <div class="trip-history-stat-label">
+                                    PERFORMANCE
+                                </div>
+
+                                <div class="trip-history-stat-value trip-history-performance">
+                                    ${performance}
+                                </div>
+                            </div>
+
+                        </div>
+
+                    </div>
+                `;
+            })
+            .join("");
+
+    } catch (error) {
+
+        console.error(
+            "Trip history loading error:",
+            error
+        );
+
+        if (historyList) {
+            historyList.innerHTML = `
+                <div class="rounded-xl border border-red-500/20 bg-red-500/5 p-5 text-center">
+
+                    <p class="text-sm text-red-400">
+                        Unable to load trip history.
+                    </p>
+
+                    <p class="text-xs text-gray-600 mt-1">
+                        Please try refreshing the dashboard.
+                    </p>
+
+                </div>
+            `;
+        }
+    }
+}
+
+// SafeRide AI — Profile modal controls
+(() => {
+    const modal = document.getElementById("profile-modal");
+    const openBtn = document.getElementById("profile-btn");
+    const closeBtn = document.getElementById("profile-close-btn");
+    const backdrop = document.getElementById("profile-backdrop");
+
+    const historyBtn = document.getElementById("profile-history-btn");
+    const reportsBtn = document.getElementById("profile-reports-btn");
+    const backBtn = document.getElementById("profile-back-btn");
+    const subview = document.getElementById("profile-subview");
+    const subviewTitle = document.getElementById("profile-subview-title");
+    const subviewContent = document.getElementById("profile-subview-content");
+    const actions = document.querySelector(".profile-modal-actions");
+
+    if (!modal || !openBtn) {
+        console.error("Profile modal elements are missing from the HTML.");
+        return;
+    }
+
+    function openProfile() {
+        modal.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+
+        if (window.lucide) {
+            window.lucide.createIcons();
+        }
+    }
+
+    function closeProfile() {
+        modal.classList.add("hidden");
+        document.body.style.overflow = "";
+        showProfileHome();
+    }
+
+    function showProfileHome() {
+        if (subview) subview.classList.add("hidden");
+        if (actions) actions.classList.remove("hidden");
+    }
+
+    function showSubview(title, content) {
+        if (subviewTitle) subviewTitle.textContent = title;
+        if (subviewContent) subviewContent.innerHTML = content;
+        if (actions) actions.classList.add("hidden");
+        if (subview) subview.classList.remove("hidden");
+    }
+
+    openBtn.addEventListener("click", openProfile);
+    if (closeBtn) closeBtn.addEventListener("click", closeProfile);
+    if (backdrop) backdrop.addEventListener("click", closeProfile);
+    if (backBtn) backBtn.addEventListener("click", showProfileHome);
+
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && !modal.classList.contains("hidden")) {
+            closeProfile();
+        }
+    });
+
+    if (historyBtn) {
+    historyBtn.addEventListener("click", async () => {
+        const driverId =
+            window.safeRideUser?.driver_id || DRIVER_ID;
+
+        showSubview(
+            "Trip History",
+            '<p class="text-sm text-gray-400">Loading your trips...</p>'
+        );
+
+        if (!driverId) {
+            subviewContent.textContent =
+                "Driver account could not be identified. Please sign in again.";
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `${BACKEND_URL}/drivers/${encodeURIComponent(driverId)}/history`
+            );
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(
+                    data.detail || "Unable to load trip history."
+                );
+            }
+
+            const trips = data.trips || [];
+
+            if (trips.length === 0) {
+                subviewContent.textContent =
+                    "No trips were found for this driver in the database.";
+                return;
+            }
+
+            subviewContent.replaceChildren();
+
+            trips.forEach((trip) => {
+                const card = document.createElement("div");
+                card.className = "trip-history-item";
+
+                const id = document.createElement("div");
+                id.className = "trip-history-id";
+                id.textContent = trip.trip_id || "Trip";
+
+                const date = document.createElement("div");
+                date.className = "trip-history-date";
+                date.textContent = trip.start_time
+                    ? new Date(trip.start_time).toLocaleString()
+                    : "Date unavailable";
+
+                const status = document.createElement("div");
+                status.className = "trip-history-date";
+                status.textContent =
+                    `Status: ${trip.status || "Unknown"}`;
+
+                const stats = document.createElement("div");
+                stats.className = "trip-history-stats";
+
+                const score = document.createElement("div");
+                score.className = "trip-history-stat-value";
+                score.textContent =
+                    trip.final_score != null
+                        ? `Safety score: ${Number(trip.final_score).toFixed(0)}/100`
+                        : "Safety score: Not available";
+
+                const rating = document.createElement("div");
+                rating.className = "trip-history-stat-value";
+                rating.textContent =
+                    trip.rating != null
+                        ? `Rating: ${trip.rating}/5`
+                        : "Rating: Not available";
+
+                const performance = document.createElement("div");
+                performance.className = "trip-history-stat-value";
+                performance.textContent =
+                    `Performance: ${trip.performance || "Not rated"}`;
+
+                stats.append(score, rating, performance);
+                card.append(id, date, status, stats);
+                subviewContent.appendChild(card);
+            });
+
+        } catch (error) {
+            console.error("Trip History error:", error);
+            subviewContent.textContent =
+                `Could not load trip history: ${error.message}`;
+        }
+    });
+}
+
+    if (reportsBtn) {
+        reportsBtn.addEventListener("click", () => {
+            let reports = [];
+
+            try {
+                const saved = localStorage.getItem("saferide_last_trip_report");
+                if (saved) reports.push(JSON.parse(saved));
+            } catch (error) {
+                console.warn("Could not read saved trip report:", error);
+            }
+
+            if (window.safeRideLastTripReport) {
+                reports.unshift(window.safeRideLastTripReport);
+            }
+
+            const uniqueReports = reports.filter(
+                (report, index, array) =>
+                    array.findIndex(item => item.id === report.id) === index
+            );
+
+            if (!uniqueReports.length) {
+                showSubview(
+                    "Trip Reports",
+                    '<p class="text-sm text-gray-400">No saved trip report is available yet. Complete a trip first.</p>'
+                );
+                return;
+            }
+
+            
+            const reportHtml = uniqueReports.map((report) => {
+                const completedAt = report.completedAt
+                    ? new Date(report.completedAt).toLocaleString()
+                    : "Date unavailable";
+
+                return '<div class="trip-history-item">' +
+                    '<div class="trip-history-id">' +
+                        (report.id || "Completed trip") +
+                    '</div>' +
+                    '<div class="trip-history-date">' +
+                        completedAt +
+                    '</div>' +
+                    '<div class="trip-history-stats">' +
+                        '<div class="trip-history-stat">' +
+                            '<div class="trip-history-stat-label">SCORE</div>' +
+                            '<div class="trip-history-stat-value">' +
+                                (report.score ?? "--") + '/10' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="trip-history-stat">' +
+                            '<div class="trip-history-stat-label">RATING</div>' +
+                            '<div class="trip-history-stat-value">' +
+                                (report.stars || "--") +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="trip-history-stat">' +
+                            '<div class="trip-history-stat-label">DURATION</div>' +
+                            '<div class="trip-history-stat-value">' +
+                                (report.duration || "--") +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+            }).join("");
+
+            showSubview("Trip Reports", reportHtml);
+        });
+    }
+})();
+
+
+
+
+
+
+// SafeRide AI — permanent Profile button connection
+(() => {
+    const profileButton = document.getElementById("profile-btn");
+    const profileModal = document.getElementById("profile-modal");
+    const closeButton = document.getElementById("profile-close-btn");
+    const backdrop = document.getElementById("profile-backdrop");
+
+    if (!profileButton || !profileModal) {
+        console.error("SafeRide Profile: button or modal not found.");
+        return;
+    }
+
+    profileButton.onclick = () => {
+        profileModal.classList.remove("hidden");
+        profileModal.style.display = "flex";
+        document.body.style.overflow = "hidden";
+
+        if (window.lucide) {
+            window.lucide.createIcons();
+        }
+    };
+
+    const closeProfile = () => {
+        profileModal.classList.add("hidden");
+        profileModal.style.display = "";
+        document.body.style.overflow = "";
+    };
+
+    if (closeButton) {
+        closeButton.onclick = closeProfile;
+    }
+
+    if (backdrop) {
+        backdrop.onclick = closeProfile;
+    }
+
+    console.log("SafeRide Profile: click handlers connected.");
+})();
