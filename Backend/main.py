@@ -547,6 +547,14 @@ def end_trip(
         round(score, 1)
     )
 
+    
+    # Use the final score calculated by the frontend report.
+    # Use the final score calculated by the frontend report.
+    score = round(
+        max(0, min(100, trip.safety_score)) / 10,
+        1
+    )
+
     trip.final_score = score
 
     # Convert score out of 10 to rating out of 5
@@ -766,4 +774,40 @@ def get_trip_alerts(
             }
             for alert in trip_alerts
         ]
+    }
+
+@app.get("/safe-stops")
+def get_safe_stops(
+    category: str = "petrol",
+    latitude: float = 28.6692,
+    longitude: float = 77.4538
+):
+    """Find nearby safe-stop locations using Google Maps search links."""
+
+    categories = {
+        "petrol": "petrol pumps",
+        "hospital": "hospitals",
+        "police": "police stations",
+        "rest": "rest areas"
+    }
+
+    if category not in categories:
+        return {
+            "success": False,
+            "message": "Invalid category. Use petrol, hospital, police, or rest."
+        }
+
+    query = categories[category]
+    maps_url = (
+        "https://www.google.com/maps/search/"
+        f"{query}/@{latitude},{longitude},14z"
+    )
+
+    return {
+        "success": True,
+        "category": category,
+        "latitude": latitude,
+        "longitude": longitude,
+        "maps_url": maps_url,
+        "message": "Open the map link to find nearby safe stops."
     }

@@ -778,7 +778,134 @@ function updateGauge(value) {
 
     currentRiskScore =
         val;
+    intelligentIntervention();
 }
+
+
+let lastInterventionLevel = "";
+let lastInterventionTime = 0;
+let highRiskStartTime = 0;
+let criticalEscalated = false;
+
+function intelligentIntervention() {
+    if (!bookingActive) return;
+
+    const level = String(currentRiskLevel || "").toUpperCase();
+    const now = Date.now();
+    if (level.includes("HIGH")) {
+    if (highRiskStartTime === 0) {
+        highRiskStartTime = now;
+    }
+
+    if (now - highRiskStartTime >= 15000 && !criticalEscalated) {
+        criticalEscalated = true;
+        currentRiskLevel = "CRITICAL";
+        currentRiskScore = Math.min(currentRiskScore, 49);
+    }
+} else {
+    highRiskStartTime = 0;
+    criticalEscalated = false;
+}
+
+    if (!level || level === "SAFE") {
+        lastInterventionLevel = "";
+        highRiskStartTime = 0;
+        criticalEscalated = false;
+        return;
+    }
+
+    // Avoid repeating the same intervention too frequently.
+    if (
+        level === lastInterventionLevel &&
+        now - lastInterventionTime < 10000 &&
+        !level.includes("CRITICAL")
+    ) {
+        return;
+    }
+
+    lastInterventionLevel = level;
+    lastInterventionTime = now;
+
+    if (criticalEscalated) {
+        currentRiskLevel = "CRITICAL";
+        currentRiskScore = Math.min(currentRiskScore, 49);
+    }
+
+    
+if (level.includes("CRITICAL")) {
+    addAlert(
+        "🚨 CRITICAL FATIGUE: Pull over safely immediately. Stop driving and rest before continuing.",
+        "critical"
+    );
+
+    const safeStopButton = document.createElement("button");
+    safeStopButton.textContent = "📍 Find a Safe Stop";
+    safeStopButton.className =
+        "mt-2 px-4 py-2 rounded-lg bg-emerald-500 text-black font-semibold";
+
+    safeStopButton.onclick = () => {
+        const choice = prompt(
+            "Choose a safe stop:\n1. Petrol Pumps\n2. Hospitals\n3. Police Stations\n4. Rest Areas",
+            "4"
+        );
+
+        const categories = {
+            "1": "petrol",
+            "2": "hospital",
+            "3": "police",
+            "4": "rest"
+        };
+
+        if (!categories[choice]) return;
+
+        const url =
+            "http://127.0.0.1:8000/safe-stops?category=" +
+            encodeURIComponent(categories[choice]) +
+            "&latitude=28.6692&longitude=77.4538";
+
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Safe Stop API request failed");
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success && data.maps_url) {
+                    window.open(
+                        data.maps_url,
+                        "_blank",
+                        "noopener,noreferrer"
+                    );
+                } else {
+                    alert(data.message || "No safe-stop link available.");
+                }
+            })
+            .catch(error => {
+                console.error("Safe Stop error:", error);
+                alert("Safe Stop API unavailable. Check the backend.");
+            });
+    };
+
+    const alertContainer = document.querySelector("#alert-container");
+    if (alertContainer) {
+        alertContainer.appendChild(safeStopButton);
+    }
+
+
+    } else if (level.includes("HIGH")) {
+        addAlert(
+            "⚠️ HIGH RISK: Avoid phone use, focus on the road, and stop at a safe location if fatigue continues.",
+            "warning"
+        );
+    } else if (level.includes("LOW")) {
+        addAlert(
+            "ℹ️ LOW RISK: Stay focused, avoid unnecessary phone use, and maintain a safe following distance.",
+            "warning"
+        );
+    }
+}
+
 
 function addAlert(message, severity = "warning") {
     if (bookingActive && severity !== "normal") {
@@ -812,6 +939,49 @@ function addAlert(message, severity = "warning") {
         }) + " — " + message;
 
     log.prepend(div);
+    if (severity === "critical") {
+    const safeStopButton = document.createElement("button");
+    safeStopButton.textContent = "📍 Find a Safe Stop";
+    safeStopButton.className =
+        "mt-2 px-3 py-2 rounded-lg bg-emerald-500 text-black font-semibold";
+
+    safeStopButton.onclick = () => {
+        const choice = prompt(
+            "Choose a safe stop:\n1. Petrol Pumps\n2. Hospitals\n3. Police Stations\n4. Rest Areas",
+            "4"
+        );
+
+        const categories = {
+            "1": "petrol",
+            "2": "hospital",
+            "3": "police",
+            "4": "rest"
+        };
+
+        if (!categories[choice]) return;
+
+        const url =
+            "http://127.0.0.1:8000/safe-stops?category=" +
+            encodeURIComponent(categories[choice]) +
+            "&latitude=28.6692&longitude=77.4538";
+
+        fetch(url)
+            .then(response => {
+                if (!response.ok) throw new Error("API request failed");
+                return response.json();
+            })
+            .then(data => {
+                if (data.success && data.maps_url) {
+                    window.open(data.maps_url, "_blank", "noopener,noreferrer");
+                } else {
+                    alert(data.message || "Safe stop unavailable.");
+                }
+            })
+            .catch(() => alert("Safe Stop API unavailable. Check the backend."));
+    };
+
+    div.appendChild(safeStopButton);
+}
 
     while (log.children.length > 10) {
         log.lastChild.remove();
@@ -2337,6 +2507,31 @@ async function endBackendTrip() {
     }
 
     try {
+        
+    // Save final safety metrics before ending the trip.
+    const safetyResponse = await fetch(
+        `${API_BASE_URL}/trips/${tripId}/safety-data`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                eye_closure_duration: maxEyeClosureMs / 1000,
+                yawn_count: yawnCount,
+                distraction_duration:
+                    distractionIncidentCount > 0 ? 1 : 0,
+                safety_score: calculateTripRating() * 10,
+                alertness_score: alertness
+            })
+        }
+    );
+
+    if (!safetyResponse.ok) {
+        throw new Error("Could not save trip safety metrics.");
+    }
+
+        
         const response = await fetch(
             `${API_BASE_URL}/trips/${tripId}/end`,
             {
@@ -2354,6 +2549,44 @@ async function endBackendTrip() {
                 data.detail || "Unable to end backend trip."
             );
         }
+
+        
+        // Sync the visible report with the backend's saved score.
+        const finalScore = Number(data.trip_report?.final_score);
+
+        if (Number.isFinite(finalScore) && finalScore >= 0 && finalScore <= 10) {
+            const stars = Math.round(finalScore / 2);
+
+            $("report-score").textContent =
+                finalScore.toFixed(1) + " / 10";
+            $("report-stars").textContent = starsForScore(finalScore);
+            $("report-rating-text").textContent = ratingText(finalScore);
+
+            const progress = finalScore * 10;
+            $("report-progress").style.width = progress + "%";
+            $("report-progress-label").textContent =
+                Math.round(progress) + "%";
+
+            // Update the locally saved report to match the backend.
+            try {
+                const saved = JSON.parse(
+                    localStorage.getItem("saferide_last_trip_report") || "null"
+                );
+
+                if (saved) {
+                    saved.score = Number(finalScore.toFixed(1));
+                    saved.stars = stars;
+                    localStorage.setItem(
+                        "saferide_last_trip_report",
+                        JSON.stringify(saved)
+                    );
+                    lastSavedTrip = saved;
+                }
+            } catch (storageError) {
+                console.warn("Could not sync local trip report:", storageError);
+            }
+        }
+
 
         console.log("Backend trip ended:", data);
 
@@ -2860,14 +3093,18 @@ function showApp(user) {
             user.total_trips ?? 0;
     }
 
+   
+        
     if (profileAverageScore) {
         const score = Number(user.average_score || 0);
 
         profileAverageScore.textContent =
             score > 0
-                ? `${score.toFixed(1)} / 100`
+                ? `${score.toFixed(1)} / 10`
                 : "Not rated yet";
     }
+
+    
 }
 
 checkAuthentication();
@@ -2982,7 +3219,7 @@ async function loadTripHistory() {
                 const score =
                     trip.final_score !== null &&
                     trip.final_score !== undefined
-                        ? Number(trip.final_score).toFixed(0)
+                        ? (Number(trip.final_score) * 10).toFixed(0)
                         : "--";
 
                 const rating =
@@ -3202,14 +3439,14 @@ async function loadTripHistory() {
                 score.className = "trip-history-stat-value";
                 score.textContent =
                     trip.final_score != null
-                        ? `Safety score: ${Number(trip.final_score).toFixed(0)}/100`
+                        ? `Safety score: ${(Number(trip.final_score) * 10).toFixed(0)}/100`
                         : "Safety score: Not available";
 
                 const rating = document.createElement("div");
                 rating.className = "trip-history-stat-value";
                 rating.textContent =
-                    trip.rating != null
-                        ? `Rating: ${trip.rating}/5`
+                    trip.final_score !== null && trip.final_score !== undefined
+                        ? `Rating: ${(Number(trip.final_score) / 2).toFixed(1)}/5`
                         : "Rating: Not available";
 
                 const performance = document.createElement("div");
@@ -3342,3 +3579,74 @@ async function loadTripHistory() {
 
     console.log("SafeRide Profile: click handlers connected.");
 })();
+
+ // SafeRide AI — Safe Stop Maps
+document.addEventListener("DOMContentLoaded", () => {
+    const mapsTile = document.getElementById("safe-stop-map");
+
+    if (!mapsTile) {
+        console.warn("Safe Stop Maps tile not found.");
+        return;
+    }
+
+    
+mapsTile.addEventListener("click", async () => {
+    const choice = prompt(
+        "Find a safe stop:\n1. Petrol Pumps\n2. Hospitals\n3. Police Stations\n4. Rest Areas",
+        "1"
+    );
+
+    const categories = {
+        "1": "petrol",
+        "2": "hospital",
+        "3": "police",
+        "4": "rest"
+    };
+
+    const category = categories[choice];
+    if (!category) return;
+
+    // Default coordinates: Noida
+    let latitude = 28.6692;
+    let longitude = 77.4538;
+
+    // Use the driver's current location when permission is granted.
+    if (navigator.geolocation) {
+        try {
+            const position = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    timeout: 5000
+                });
+            });
+
+            latitude = position.coords.latitude;
+            longitude = position.coords.longitude;
+        } catch (error) {
+            console.warn("Location unavailable; using default coordinates.");
+        }
+    }
+
+    try {
+        const response = await fetch(
+            `http://127.0.0.1:8000/safe-stops?category=${encodeURIComponent(category)}&latitude=${latitude}&longitude=${longitude}`
+        );
+
+        if (!response.ok) {
+            throw new Error(`API returned ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success && data.maps_url) {
+            window.open(data.maps_url, "_blank", "noopener,noreferrer");
+        } else {
+            alert(data.message || "Could not find safe stops.");
+        }
+    } catch (error) {
+        console.error("Safe Stop API error:", error);
+        alert("Safe Stop API se connect nahi ho paaya. Check that the backend is running.");
+    }
+});
+
+});
