@@ -64,7 +64,7 @@
 
 <header class="border-b border-gray-800 bg-gray-950/95">
     <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
-        ```html
+       
         <div class="flex items-center gap-3">
 
             <!-- DRIVER PROFILE BUTTON -->
@@ -110,7 +110,7 @@
             </button>
         </div>
     </section>
-```
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
         <!-- CAMERA -->
@@ -492,7 +492,7 @@
     </p>
 </main>
 
-```html
+
 <!-- DRIVER PROFILE MODAL -->
 <div id="profile-modal" class="profile-modal hidden">
 
@@ -585,6 +585,64 @@
 
             <h3 id="profile-subview-title"></h3>
             <div id="profile-subview-content"></div>
+                        <section id="driver-insights-panel" class="driver-insights-panel hidden">
+                <h3>Safety Trends & Driver Insights</h3>
+
+                <div class="driver-insights-grid">
+                    <article class="driver-insight-card">
+                        <span>Total Trips</span>
+                        <strong id="insights-total-trips">0</strong>
+                    </article>
+
+                    <article class="driver-insight-card">
+                        <span>Average Safety Score</span>
+                        <strong id="insights-average-score">-- / 10</strong>
+                    </article>
+
+                    <article class="driver-insight-card">
+                        <span>Latest Safety Score</span>
+                        <strong id="insights-latest-score">-- / 10</strong>
+                    </article>
+                    <article class="driver-insight-card">
+                        <span>Total Yawns</span>
+                        <strong id="insights-total-yawns">0</strong>
+                    </article>
+
+                    <article class="driver-insight-card">
+                        <span>Eye-Closure Events</span>
+                        <strong id="insights-eye-events">0</strong>
+                    </article>
+
+                    <article class="driver-insight-card">
+                        <span>Distraction Events</span>
+                        <strong id="insights-distraction-events">0</strong>
+                    </article>
+                </div>
+
+                <div class="driver-insight-card">
+                    <h4>Safety Score Trend</h4>
+                    <canvas id="safety-trend-chart" height="180"></canvas>
+                </div>
+
+                
+                    
+                <div class="driver-insight-card">
+                    <h4>Top Safety Concern</h4>
+                    <strong id="insights-top-concern">No data yet</strong>
+                    <p id="insights-top-concern-detail">
+                        Complete trips to identify recurring safety events.
+                    </p>
+                </div>
+
+                    
+                <div class="driver-insight-card">
+                    <h4>Personalized Driver Insights</h4>
+                    <ul id="driver-insights-list">
+                        <li>Complete a trip to receive safety insights.</li>
+                    </ul>
+                </div>
+
+            </section>
         </div>
 
         <button id="logout-btn"
@@ -596,7 +654,7 @@
 
     </section>
 </div>
-```
+
 
     <script type="module" src="script.js"></script>
 </body>

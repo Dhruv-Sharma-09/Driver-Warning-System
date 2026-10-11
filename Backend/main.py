@@ -328,7 +328,11 @@ def get_driver_history(
                 if trip.end_time else None,
                 "final_score": trip.final_score,
                 "rating": trip.rating,
-                "performance": trip.performance
+                "performance": trip.performance,
+                "total_yawns": trip.total_yawns or 0,
+                "eye_closure_events": trip.eye_closure_events or 0,
+                "distraction_events": trip.distraction_events or 0,
+                "warnings": trip.warnings or 0
             }
             for trip in driver_trips
         ]

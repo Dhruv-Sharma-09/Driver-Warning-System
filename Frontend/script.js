@@ -831,8 +831,8 @@ function intelligentIntervention() {
         currentRiskScore = Math.min(currentRiskScore, 49);
     }
 
-    
-if (level.includes("CRITICAL")) {
+    const interventionLevel = String(currentRiskLevel || level).toUpperCase();
+if (interventionLevel.includes("CRITICAL")) {
     addAlert(
         "🚨 CRITICAL FATIGUE: Pull over safely immediately. Stop driving and rest before continuing.",
         "critical"
@@ -887,10 +887,13 @@ if (level.includes("CRITICAL")) {
             });
     };
 
+        
     const alertContainer = document.querySelector("#alert-container");
-    if (alertContainer) {
+    if (alertContainer && !alertContainer.querySelector(".safe-stop-button")) {
+        safeStopButton.classList.add("safe-stop-button");
         alertContainer.appendChild(safeStopButton);
     }
+
 
 
     } else if (level.includes("HIGH")) {
@@ -3178,6 +3181,11 @@ async function loadTripHistory() {
         }
 
         const trips = data.trips || [];
+        const insightsPanel = document.getElementById("driver-insights-panel");
+        if (insightsPanel) {
+            insightsPanel.classList.remove("hidden");
+            await loadDriverInsights();
+        }
 
         if (historyCount) {
             historyCount.textContent = trips.length;
@@ -3356,12 +3364,17 @@ async function loadTripHistory() {
         if (actions) actions.classList.remove("hidden");
     }
 
-    function showSubview(title, content) {
-        if (subviewTitle) subviewTitle.textContent = title;
-        if (subviewContent) subviewContent.innerHTML = content;
-        if (actions) actions.classList.add("hidden");
-        if (subview) subview.classList.remove("hidden");
-    }
+    
+function showSubview(title, content) {
+    const insightsPanel = document.getElementById("driver-insights-panel");
+
+    if (insightsPanel) insightsPanel.classList.add("hidden");
+    if (subviewTitle) subviewTitle.textContent = title;
+    if (subviewContent) subviewContent.innerHTML = content;
+    if (actions) actions.classList.add("hidden");
+    if (subview) subview.classList.remove("hidden");
+}
+
 
     openBtn.addEventListener("click", openProfile);
     if (closeBtn) closeBtn.addEventListener("click", closeProfile);
@@ -3404,6 +3417,13 @@ async function loadTripHistory() {
             }
 
             const trips = data.trips || [];
+            
+            const insightsPanel = document.getElementById("driver-insights-panel");
+                if (insightsPanel) {
+                    insightsPanel.classList.remove("hidden");
+                    await loadDriverInsights();
+                }
+
 
             if (trips.length === 0) {
                 subviewContent.textContent =
@@ -3454,7 +3474,14 @@ async function loadTripHistory() {
                 performance.textContent =
                     `Performance: ${trip.performance || "Not rated"}`;
 
-                stats.append(score, rating, performance);
+                
+                const events = document.createElement("div");
+                events.className = "trip-history-stat-value";
+                events.textContent =
+                    `Yawns: ${trip.total_yawns || 0} | Eye closures: ${trip.eye_closure_events || 0} | Distractions: ${trip.distraction_events || 0}`;
+
+                
+                    stats.append(score, rating, performance, events);
                 card.append(id, date, status, stats);
                 subviewContent.appendChild(card);
             });
@@ -3650,3 +3677,270 @@ mapsTile.addEventListener("click", async () => {
 });
 
 });
+
+// ============================================================
+// SAFETY TRENDS + DRIVER INSIGHTS
+// ============================================================
+
+async function loadDriverInsights() {
+    const panel = document.getElementById("driver-insights-panel");
+    const list = document.getElementById("driver-insights-list");
+    const driverId = window.safeRideUser?.driver_id || DRIVER_ID;
+
+    if (!driverId || !panel) {
+        console.warn("Driver ID or insights panel is unavailable.");
+        return;
+    }
+
+    panel.classList.remove("hidden");
+
+    if (list) {
+        list.innerHTML = "<li>Loading your safety insights...</li>";
+    }
+
+    try {
+        const response = await fetch(
+            `${BACKEND_URL}/drivers/${encodeURIComponent(driverId)}/history`
+        );
+
+        if (!response.ok) {
+            throw new Error("Could not load trip history.");
+        }
+
+        const data = await response.json();
+        const trips = (data.trips || [])
+            .filter(trip =>
+                trip.final_score !== null &&
+                trip.final_score !== undefined &&
+                Number.isFinite(Number(trip.final_score))
+            )
+            .reverse();
+
+        document.getElementById("insights-total-trips").textContent =
+            data.total_trips ?? trips.length;
+
+        const scores = trips.map(trip =>
+            Math.max(0, Math.min(10, Number(trip.final_score)))
+        );
+        
+        const totalYawns = trips.reduce(
+            (sum, trip) => sum + Number(trip.total_yawns || 0), 0
+        );
+
+        const totalEyeEvents = trips.reduce(
+            (sum, trip) => sum + Number(trip.eye_closure_events || 0), 0
+        );
+
+        const totalDistractions = trips.reduce(
+            (sum, trip) => sum + Number(trip.distraction_events || 0), 0
+        );
+
+        document.getElementById("insights-total-yawns").textContent = totalYawns;
+        document.getElementById("insights-eye-events").textContent = totalEyeEvents;
+        document.getElementById("insights-distraction-events").textContent = totalDistractions;
+
+
+        const average = scores.length
+            ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+            : null;
+        
+        const averageLabel = document.getElementById("insights-average-score");
+
+        if (averageLabel) {
+            averageLabel.title = "Average of recorded trip safety scores (out of 10)";
+            averageLabel.textContent =
+                average === null ? "-- / 10" : `${average.toFixed(1)} / 10`;
+            }
+        document.getElementById("insights-average-score").textContent =
+            average === null ? "-- / 10" : `${average.toFixed(1)} / 10`;
+
+        document.getElementById("insights-latest-score").textContent =
+            scores.length ? `${scores[scores.length - 1].toFixed(1)} / 10` : "-- / 10";
+
+        const insights = [];
+        
+        if (scores.length > 0) {
+            const latestScore = scores[scores.length - 1];
+
+            if (latestScore >= 9) {
+                insights.push("Great performance! Maintain your safe-driving habits.");
+            } else if (latestScore >= 7) {
+                insights.push("Good performance. Keep working toward a consistently high safety score.");
+            } else if (latestScore >= 5) {
+                insights.push("Focus on reducing fatigue and distraction alerts to improve your score.");
+            } else {
+                insights.push("Your latest safety score is low. Prioritize rest and avoid driving while tired or distracted.");
+            }
+        }
+
+
+        if (!trips.length) {
+            insights.push("Complete and end a trip to see your safety score trend.");
+        } else {
+            const recent = trips.slice(-3);
+            const previous = trips.slice(-6, -3);
+
+            const recentAvg = recent.reduce(
+                (sum, trip) => sum + Number(trip.final_score), 0
+            ) / recent.length;
+
+            if (previous.length) {
+                const previousAvg = previous.reduce(
+                    (sum, trip) => sum + Number(trip.final_score), 0
+                ) / previous.length;
+
+                if (recentAvg > previousAvg + 0.2) {
+                    insights.push("Your recent safety scores are improving. Keep up the safe-driving habits.");
+                } else if (recentAvg < previousAvg - 0.2) {
+                    insights.push("Your recent scores have declined. Review your recent alerts and focus on safer driving.");
+                } else {
+                    insights.push("Your recent safety scores are broadly stable.");
+                }
+            } else {
+                insights.push("Complete more trips to reveal longer-term safety trends.");
+            }
+
+            const yawns = trips.reduce(
+                (sum, trip) => sum + Number(trip.total_yawns || 0), 0
+            );
+            const eyeEvents = trips.reduce(
+                (sum, trip) => sum + Number(trip.eye_closure_events || 0), 0
+            );
+            const distractions = trips.reduce(
+                (sum, trip) => sum + Number(trip.distraction_events || 0), 0
+            );
+
+            if (yawns > 0) {
+                insights.push(`Yawning was recorded ${yawns} time(s). Take breaks when tired.`);
+            }
+
+            if (eyeEvents > 0) {
+                insights.push(`Eye-closure events recorded: ${eyeEvents}. Never continue driving when drowsy.`);
+            }
+
+            if (distractions > 0) {
+                insights.push(`Distraction events recorded: ${distractions}. Keep your attention on the road.`);
+            }
+
+            if (yawns === 0 && eyeEvents === 0 && distractions === 0) {
+                insights.push("No yawns, eye-closure events or distractions are recorded in the available trip history.");
+            }
+        }
+
+        if (list) {
+            list.replaceChildren();
+
+            insights.forEach(message => {
+                const item = document.createElement("li");
+                item.textContent = message;
+                list.appendChild(item);
+            });
+        }
+        
+        const concernValue = document.getElementById("insights-top-concern");
+        const concernDetail = document.getElementById("insights-top-concern-detail");
+
+        if (concernValue && concernDetail) {
+            const concerns = [
+                { name: "Yawning", count: totalYawns, detail: "Consider taking breaks when tired." },
+                { name: "Eye Closure", count: totalEyeEvents, detail: "Avoid driving when drowsy." },
+                { name: "Distraction", count: totalDistractions, detail: "Keep your attention on the road." }
+            ];
+
+            concerns.sort((a, b) => b.count - a.count);
+
+            if (concerns[0].count === 0) {
+                concernValue.textContent = "No events recorded";
+                concernDetail.textContent = "No yawns, eye-closure events or distractions are recorded in the available trip history.";
+            } else {
+                concernValue.textContent = concerns[0].name;
+                concernDetail.textContent =
+                    `${concerns[0].count} event(s) recorded. ${concerns[0].detail}`;
+            }
+        }
+
+
+        drawSafetyTrend(scores);
+
+    } catch (error) {
+        console.error("Driver insights error:", error);
+
+        if (list) {
+            list.innerHTML =
+                "<li>Unable to load insights. Check that the backend is running and try again.</li>";
+        }
+    }
+}
+
+function drawSafetyTrend(scores) {
+    const canvas = document.getElementById("safety-trend-chart");
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    const width = canvas.clientWidth || 500;
+    const height = 180;
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = "100%";
+    canvas.style.height = `${height}px`;
+
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    const left = 32;
+    const right = 12;
+    const top = 16;
+    const bottom = 28;
+    const chartWidth = width - left - right;
+    const chartHeight = height - top - bottom;
+
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#9ca3af";
+    ctx.strokeStyle = "#374151";
+    ctx.lineWidth = 1;
+
+    [0, 5, 10].forEach(value => {
+        const y = top + chartHeight * (1 - value / 10);
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(width - right, y);
+        ctx.stroke();
+        ctx.fillText(String(value), 8, y + 4);
+    });
+
+    if (!scores.length) {
+        ctx.fillStyle = "#9ca3af";
+        ctx.fillText("No completed trip scores available yet.", left + 8, top + chartHeight / 2);
+        return;
+    }
+
+    const points = scores.map((score, index) => ({
+        x: scores.length === 1
+            ? left + chartWidth / 2
+            : left + index * chartWidth / (scores.length - 1),
+        y: top + chartHeight * (1 - score / 10)
+    }));
+
+    ctx.strokeStyle = "#22c55e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    points.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+    });
+
+    ctx.stroke();
+
+    points.forEach((point, index) => {
+        ctx.beginPath();
+        ctx.fillStyle = "#22c55e";
+        ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#d1d5db";
+        ctx.fillText(String(index + 1), point.x - 3, height - 8);
+    });
+}
