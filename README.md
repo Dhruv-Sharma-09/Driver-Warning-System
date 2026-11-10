@@ -1,4 +1,4 @@
-# 🚗 SafeRide AI
+# 🚗 Driver Warning System
 
 ### Your AI Co-Pilot for Safer Driving
 
@@ -8,7 +8,7 @@
 
 ## 📌 Overview
 
-**SafeRide AI** is an AI-powered driver safety and surveillance system designed to provide real-time awareness of potentially unsafe driver behavior.
+**Driver Warning System** is an AI-powered driver safety and surveillance system designed to provide real-time awareness of potentially unsafe driver behavior.
 
 The system uses a smartphone/browser camera to monitor the driver's face during an active trip. Facial landmarks are processed using **MediaPipe Face Landmarker**, while JavaScript-based computer-vision logic derives safety signals such as:
 
@@ -39,13 +39,13 @@ Looking away from the road for extended periods can reduce attention to the driv
 
 Traditional trip systems primarily focus on transportation and trip management rather than continuous driver-state monitoring.
 
-SafeRide AI addresses this gap by providing a real-time driver safety layer during an active trip.
+Driver Warning System addresses this gap by providing a real-time driver safety layer during an active trip.
 
 ---
 
 ## 💡 Our Solution
 
-SafeRide AI introduces a **booking/trip-based driver safety mode**.
+Driver Warning System introduces a **booking/trip-based driver safety mode**.
 
 When a trip starts:
 
@@ -74,7 +74,7 @@ Trip Safety Data & Report
 
 ## 📸 Screenshots & Demo
 
-The SafeRide AI prototype provides a real-time driver monitoring interface with safety alerts, event logging, and trip-level reporting.
+The Driver Warning System prototype provides a real-time driver monitoring interface with safety alerts, event logging, and trip-level reporting.
 
 ### 🏠 Main Interface
 
